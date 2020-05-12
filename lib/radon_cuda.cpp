@@ -35,6 +35,9 @@ torch::Tensor radon_forward(
     float u_center)
 {
 	  CHECK_INPUT(tomo);
+	  if(!(tomo.dtype() == torch::kFloat32)){
+		AT_ERROR("radon_cuda_forward is implemented for only 32-bit floating point");
+	  }
 
 	  torch::Tensor angles_;
 	  if( angles.device().is_cuda()
@@ -59,6 +62,9 @@ torch::Tensor radon_backward(
     float u_center)
 {
 	  CHECK_INPUT(sino);
+	  if(!(sino.dtype() == torch::kFloat32)){
+		AT_ERROR("radon_cuda_forward is implemented for only 32-bit floating point");
+	  }
 
 	  torch::Tensor angles_;
 	  if( angles.device().is_cuda()

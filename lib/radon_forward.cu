@@ -1,5 +1,6 @@
 #include <cassert>
 #include <cstdint>
+#include <cstdio>
 
 #include <torch/extension.h>
 #include <cuda.h>
@@ -74,6 +75,18 @@ static void radonT_gpu_calc(float *sino, cudaTextureObject_t tomo,
 	}
 }
 
+#define CHECK(call)                                   \
+{                                                     \
+	const cudaError_t error = call;                   \
+	if (error != cudaSuccess)                         \
+	{                                                 \
+		printf("Error: %s:%d,  ", __FILE__, __LINE__); \
+		printf("code:%d, reason: %s\n", error,         \
+			cudaGetErrorString(error));               \
+		exit(1);                                       \
+	}                                                 \
+}
+
 void radonT_gpu(float *sino, const float *tomo,
 		int width, int height, int umax,
 		int n_angles, float *angles,
@@ -83,7 +96,7 @@ void radonT_gpu(float *sino, const float *tomo,
 		cudaCreateChannelDesc(32, 0, 0, 0, cudaChannelFormatKindFloat);
 	cudaArray *tomo_;
 	cudaMallocArray(&tomo_, &channelDesc, width, height);
-	cudaMemcpy2DToArray(tomo_, 0, 0, tomo, width*sizeof(float), width*sizeof(float), height, cudaMemcpyDeviceToDevice);
+	CHECK(cudaMemcpy2DToArray(tomo_, 0, 0, tomo, width*sizeof(float), width*sizeof(float), height, cudaMemcpyDeviceToDevice));
 
 	struct cudaResourceDesc resDesc;
 	memset(&resDesc, 0, sizeof(resDesc));
@@ -117,19 +130,16 @@ torch::Tensor radon_cuda_forward(
 		float y_center,
 		float u_center)
 {
+	int height = tomo.size(0);
+	int width = tomo.size(1);
+	int n_angles = angles.size(0);
+
+	auto options = torch::TensorOptions()
+		.dtype(torch::kFloat32)
+		.device(torch::kCUDA, tomo.device().index());
+	torch::Tensor sino = torch::empty({n_angles, width_sino}, options);
+
 	AT_DISPATCH_FLOATING_TYPES(tomo.type(), "radon_cuda_forward", ([&] {
-		if(sizeof(scalar_t) != 32){
-			AT_ERROR("radon_cuda_forward is implemented for only 32-bit floating point");
-		}else{
-			int height = tomo.size(0);
-			int width = tomo.size(1);
-			int n_angles = angles.size(0);
-
-			auto options = torch::TensorOptions()
-				.dtype(torch::kFloat32)
-				.device(torch::kCUDA, tomo.device().index());
-			torch::Tensor sino = torch::empty({n_angles, width_sino}, options);
-
 			radonT_gpu(
 				sino.data_ptr<float>(),
 				tomo.data_ptr<float>(),
@@ -141,7 +151,7 @@ torch::Tensor radon_cuda_forward(
 				x_center,
 				y_center,
 				u_center);
-			return sino;
-		}
 	}));
+
+	return sino;
 }

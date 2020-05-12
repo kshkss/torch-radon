@@ -82,18 +82,15 @@ torch::Tensor radon_cuda_backward(
 		float y_center,
 		float u_center)
 {
+	int n_angles = sino.size(0);
+	int width_sino = sino.size(1);
+
+	auto options = torch::TensorOptions()
+		.dtype(torch::kFloat32)
+		.device(torch::kCUDA, sino.device().index());
+	torch::Tensor tomo = torch::empty({height, width}, options);
+
 	AT_DISPATCH_FLOATING_TYPES(sino.type(), "radon_cuda_backward", ([&] {
-		if(sizeof(scalar_t) != 32){
-			AT_ERROR("radon_cuda_backward is implemented for only 32-bit floating point");
-		}else{
-			int n_angles = sino.size(0);
-			int width_sino = sino.size(1);
-
-			auto options = torch::TensorOptions()
-				.dtype(torch::kFloat32)
-				.device(torch::kCUDA, sino.device().index());
-			torch::Tensor tomo = torch::empty({height, width}, options);
-
 			backprojection_gpu(
 				tomo.data_ptr<float>(),
 				sino.data_ptr<float>(),
@@ -105,8 +102,8 @@ torch::Tensor radon_cuda_backward(
 				x_center,
 				y_center,
 				u_center);
-			return sino;
-		}
 	}));
+
+	return tomo;
 }
 
