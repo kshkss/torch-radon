@@ -13,27 +13,30 @@ pip install git+https://github.com/kshkss/torch-radon
 
 ## Usage
 ```
-# Import torch followed by torch_radon.
 import torch
 from torch_radon import radon, backprojection
 import math
 
+n_angles = 200
+width = 256
+
 # Define projection angles for radon transform.
-angles = math.pi * torch.arange(200, dtype=torch.float32) / 200.0
+angles = math.pi * torch.arange(n_angles, dtype=torch.float32) / n_angles
 
 # Load an image file as a Tensor that has 32-bit float elements and is allocated on gpu.
-image = torch.randn((256, 256), dtype=torch.float32, device='cuda', requires_grad=True)
+image = torch.randn((width, width), dtype=torch.float32, device='cuda', requires_grad=True)
 
 # Call radon transform
 radon_results = radon(image, angles)
 
-# 
-sinogram = torch.randn((200, 256), dtype=torch.float32, device='cuda')
+#
+sinogram = torch.randn((n_angles, width), dtype=torch.float32, device='cuda')
 inner_product = (sinogram * radon_results).sum()
 inner_product.backward()
 image.grad    ##= backprojection(sinogram, angles)
 
 # Evaluation for the gradient is computed indirectly and include some error.
-error = (sinogram * radon_results).sum() - (backprojection(sinogram, angles) * image).sum()
+error = (sinogram * radon(image, angles)).sum() - (backprojection(sinogram, angles) * image).sum()
+print(error)
 ```
 
