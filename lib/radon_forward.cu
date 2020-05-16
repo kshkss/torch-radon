@@ -37,23 +37,25 @@ static void vrange(float *vmin, float *vmax, float theta, float x0, float x1, fl
 	}
 }
 
+template<class scalar_t>
 __device__ __inline__
-static void projection(float *acc,
+static void projection(scalar_t *acc,
 		cudaTextureObject_t texObj, int width, int height,
 		float xc, float yc, float theta,
 		float u, float v){
 	float x_ = xc + cos(theta) * u + sin(theta) * v;
 	float y_ = yc - sin(theta) * u + cos(theta) * v;
 
-	if(x_ >= 0 && x_ < (float)width){
-		if(y_ >= 0 && y_ < (float)height){
-			*acc += tex2D<float>(texObj, x_, y_);
+	if(x_ >= 0 && x_ <= (float)width - 1){
+		if(y_ >= 0 && y_ <= (float)height - 1){
+			*acc += static_cast<scalar_t>(tex2D<float>(texObj, x_, y_));
 		}
 	}
 }
 
+template<class scalar_t>
 __global__
-static void radonT_gpu_calc(float *sino, cudaTextureObject_t tomo,
+static void radonT_gpu_calc(scalar_t *sino, cudaTextureObject_t tomo,
 		int width, int height, int umax,
 		int n_angles, float *angles,
 		float xc, float yc, float uc)
@@ -65,9 +67,9 @@ static void radonT_gpu_calc(float *sino, cudaTextureObject_t tomo,
 	float v_min, v_max;
 	vrange(&v_min, &v_max, theta, -xc, (float)(width-1)-xc, -yc, (float)(height-1)-yc);
 
-	float acc = 0.0;
+	scalar_t acc = 0.0;
 	for(float v = v_min; v < v_max; v += 1.0){
-		projection(&acc, tomo, width, height, xc, yc, theta, (float)u - uc, v);
+		projection<scalar_t>(&acc, tomo, width, height, xc, yc, theta, (float)u - uc, v);
 	}
 
 	if(u < umax){
@@ -87,7 +89,8 @@ static void radonT_gpu_calc(float *sino, cudaTextureObject_t tomo,
 	}                                                 \
 }
 
-void radonT_gpu(float *sino, const float *tomo,
+template<class scalar_t>
+void radonT_gpu(scalar_t *sino, const float *tomo,
 		int width, int height, int umax,
 		int n_angles, float *angles,
 		float xc, float yc, float uc)
@@ -116,32 +119,28 @@ void radonT_gpu(float *sino, const float *tomo,
 
 	dim3 block(n_threads);
 	dim3 grid((width + block.x - 1) / block.x, n_angles, 1);
-	radonT_gpu_calc<<<grid, block>>>(sino, texObj, width, height, umax, n_angles, angles, xc, yc, uc);
+	radonT_gpu_calc<scalar_t><<<grid, block>>>(sino, texObj, width, height, umax, n_angles, angles, xc, yc, uc);
 
 	cudaDestroyTextureObject(texObj);
 	cudaFreeArray(tomo_);
 }
 
 torch::Tensor radon_cuda_forward(
+		torch::Tensor sino,
 		torch::Tensor tomo,
 		torch::Tensor angles,
-		int width_sino,
 		float x_center,
 		float y_center,
 		float u_center)
 {
 	int height = tomo.size(0);
 	int width = tomo.size(1);
-	int n_angles = angles.size(0);
+	int n_angles = sino.size(0);
+	int width_sino = sino.size(1);
 
-	auto options = torch::TensorOptions()
-		.dtype(torch::kFloat32)
-		.device(torch::kCUDA, tomo.device().index());
-	torch::Tensor sino = torch::empty({n_angles, width_sino}, options);
-
-	AT_DISPATCH_FLOATING_TYPES(tomo.type(), "radon_cuda_forward", ([&] {
-			radonT_gpu(
-				sino.data_ptr<float>(),
+	AT_DISPATCH_FLOATING_TYPES(sino.type(), "radon_cuda_forward", ([&] {
+			radonT_gpu<scalar_t>(
+				sino.data_ptr<scalar_t>(),
 				tomo.data_ptr<float>(),
 				width,
 				height,

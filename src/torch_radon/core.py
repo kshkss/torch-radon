@@ -1,19 +1,32 @@
 import math
 import torch
+from logging import getLogger
+
+logger = getLogger(__name__)
 
 assert (torch.cuda.is_available())
 import radon_cuda as radon_cpp
 
 class RadonFunction(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, tomo, angles, sino_width=None, x_center=None, y_center=None, sino_center=None):
+    def forward(ctx, tomo, angles, sino_width=None, x_center=None, y_center=None, sino_center=None, out=None):
         assert tomo.ndim == 2
         assert angles.ndim == 1
 
         height = tomo.shape[0]
         width = tomo.shape[1]
-        if sino_width is None:
-            sino_width = width
+        
+        if out is None:
+            if sino_width is None:
+                sino_width = width
+            out = torch.empty((angles.shape[0], sino_width), dtype=torch.float64, device=tomo.device)
+        else:
+            assert(angles.shape[0] == out.shape[0])
+            if sino_width is None:
+                sino_width = out.shape[1]
+            else:
+                assert(sino_width == out.shape[1])
+
         if x_center is None:
             x_center = 0.5 * (width - 1)
         if y_center is None:
@@ -21,8 +34,7 @@ class RadonFunction(torch.autograd.Function):
         if sino_center is None:
             sino_center = 0.5 * (sino_width - 1)
 
-        sino = radon_cpp.forward(tomo, angles, sino_width, x_center, y_center, sino_center)
-        assert sino.shape == (angles.shape[0], sino_width)
+        sino = radon_cpp.forward(out, tomo, angles, x_center, y_center, sino_center)
 
         sizes = torch.tensor([width, height, sino_width], dtype=torch.int)
         centers = torch.tensor([x_center, y_center, sino_center], dtype=torch.float32)
@@ -38,8 +50,10 @@ class RadonFunction(torch.autograd.Function):
 
         assert grad_sino.shape == (angles.shape[0], sino_width)
         if ctx.needs_input_grad[0]:
-            grad_tomo = radon_cpp.backward(grad_sino, angles, width, height, x_center, y_center, sino_center)
-            assert grad_tomo.shape == (height, width)
+            grad_tomo = torch.empty((height, width), dtype=torch.float32, device=grad_sino.device)
+            if grad_sino.dtype == torch.float64:
+                logger.debug('Backward of radon: the precision of input gradients is fallback to FP32')
+            radon_cpp.backward(grad_tomo, grad_sino.to(torch.float32), angles, x_center, y_center, sino_center)
         else:
             grad_tomo = None
 
@@ -49,16 +63,28 @@ radon = RadonFunction.apply
 
 class BackprojectionFunction(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, sino, angles, width=None, height=None, x_center=None, y_center=None, sino_center=None):
+    def forward(ctx, sino, angles, width=None, height=None, x_center=None, y_center=None, sino_center=None, out=None):
         assert sino.ndim == 2
         assert angles.ndim == 1
         assert angles.shape[0] == sino.shape[0]
 
         sino_width = sino.shape[1]
-        if width is None:
-            width = sino_width
-        if height is None:
-            height = sino_width
+        if out is None:
+            if width is None:
+                width = sino_width
+            if height is None:
+                height = sino_width
+            out = torch.empty((height, width), dtype=torch.float64, device=sino.device)
+        else:
+            if width is None:
+                width = out.shape[1]
+            else:
+                assert(width == out.shape[1])
+            if height is None:
+                height = out.shape[0]
+            else:
+                assert(height == out.shape[0])
+
         if x_center is None:
             x_center = 0.5 * (width - 1)
         if y_center is None:
@@ -66,7 +92,7 @@ class BackprojectionFunction(torch.autograd.Function):
         if sino_center is None:
             sino_center = 0.5 * (sino_width - 1)
 
-        tomo = radon_cpp.backward(sino, angles, width, height, x_center, y_center, sino_center)
+        tomo = radon_cpp.backward(out, sino, angles, x_center, y_center, sino_center)
         assert tomo.shape == (height, width)
 
         sizes = torch.tensor([width, height, sino_width], dtype=torch.int)
@@ -83,8 +109,10 @@ class BackprojectionFunction(torch.autograd.Function):
 
         assert grad_tomo.shape == (height, width)
         if ctx.needs_input_grad[0]:
-            grad_sino = radon_cpp.forward(grad_tomo, angles, sino_width, x_center, y_center, sino_center)
-            assert grad_sino.shape == (angles.shape[0], sino_width)
+            grad_sino = torch.empty((angles.shape[0], sino_width), dtype=torch.float32, device=grad_tomo.device)
+            if grad_tomo.dtype == torch.float64:
+                logger.debug('Backward of backprojection: the precision of input gradients is fallback to FP32')
+            radon_cpp.forward(grad_sino, grad_tomo.to(torch.float32), angles, x_center, y_center, sino_center)
         else:
             grad_sino = None
 
